@@ -1,15 +1,63 @@
 import urllib.request
 import json, time
 import base64, sys
+import webbrowser as wb
+import threading
+
+from flask import Flask
+from flask import request
 
 from tkinter import *
 from io import BytesIO
 from PIL import Image, ImageTk
 
-# Paste your access token here! (User auth is a WIP)
-access_token = ""
+access_token = None
+refresh_token = None
 
-def get_song_info():            
+# client id, from registered app on spotify developer
+client_id = b"0e0a0623956e4b78ab1cd3e3c0ef2078"
+
+def get_tokens(auth_code):
+    # encode client details
+    client_code = client_id + b":" + client_secret
+    encoded_header = base64.urlsafe_b64encode(client_code).decode("utf-8")
+    print(encoded_header)
+    
+    # create parameters
+    data = urllib.parse.urlencode({
+        "grant_type": "authorization_code",
+        "code": auth_code,
+        "redirect_uri": "http://127.0.0.1:5000"
+    }).encode()
+    
+    print (data)
+    
+    # create request
+    req = urllib.request.Request(
+        url="https://accounts.spotify.com/api/token",
+        data=data,
+        method="POST"
+    )
+
+    # add client info header
+    req.add_header("Authorization", "Basic " + encoded_header)
+    req.add_header("Content-Type", "application/x-www-form-urlencoded")
+
+    # resp = urllib.request.urlopen(req)
+    # print (resp)
+    
+    with urllib.request.urlopen(req) as f:
+        resp = json.loads(f.read().decode("utf-8"))
+        print (resp)
+
+        global access_token
+        access_token = resp["access_token"]
+
+def get_song_info():
+    if access_token == None:
+        time.sleep(1)
+        get_song_info()
+        
     req = urllib.request.Request(url='https://api.spotify.com/v1/me/player/currently-playing')
     req.add_header("Authorization", "Bearer " + access_token)
 
@@ -24,15 +72,57 @@ def get_song_info():
 
         return info
 
+def run_backend():
+    # start flask endpoint for receiving auth
+    f_app = Flask(__name__)
+
+    @f_app.route('/')
+    def index():
+        # get code from parameters
+        auth_code = request.args.get("code")
+        get_tokens(auth_code)
+        
+        return """
+        <html>
+        <head><title>nowplaying</title></head>
+        <body>
+        Thanks for logging in to nowplaying! You may now close this browser window.
+        </body>
+        </html>
+        """
+
+    @f_app.route('/auth')
+    def auth():
+        return "Auth endpoint"
+    
+    f_app.run(debug=False, use_reloader=False)
+    
 class Application(Frame):
     def __init__(self, master=None):
         super().__init__(master, bg="#212121")
         self.master = master
         self.pack()
 
+        self.authenticate()
+        # self.start_server()
         self.update_song_info()
         self.create_widgets()
         self.run_interval()
+        
+    def authenticate(self):
+        baseurl = "https://accounts.spotify.com/authorize?"
+        params = urllib.parse.urlencode({
+            'client_id': client_id, 
+            'response_type': 'code',
+            'redirect_uri': 'http://127.0.0.1:5000',
+            'scope': 'user-read-currently-playing'
+        })
+
+        endpoint = baseurl + params
+        print (endpoint)
+
+        wb.open_new_tab(endpoint)
+        # sys.exit(0)
 
     def update_song_info(self):
         info = get_song_info()
@@ -67,27 +157,15 @@ class Application(Frame):
             font="{Proxima Nova} 11")
         self.songinfo.pack(side="bottom")
 
-# # get auth stuff (DON'T UPLOAD/SHOW YOUR CODE WITH KEYS IN PLAINTEXT)
-# client_id = b""
-# client_secret = b""
-# client_code = client_id + b":" + client_secret
-# encoded_header = base64.urlsafe_b64encode(client_code).decode("utf-8")
+# read client_secret from file (don't commit this!)
+csf = open("client_secret.key", "rb")
+client_secret = csf.readline().strip()
 
-# # create request
-# req = urllib.request.Request(
-#     url="https://accounts.spotify.com/api/token",
-#     data=b"grant_type=client_credentials"
-# )
-# req.add_header("Content-Type", "application/x-www-form-urlencoded")
-# req.add_header("Authorization", "Basic " + encoded_header)
+t = threading.Thread(target=run_backend)
+t.daemon = True
+t.start()
 
-# # obtain access token
-# response = urllib.request.urlopen(req)
-# response = json.loads(response.read())
-# access_token = response["access_token"]
-# print (access_token)
-
-# start application
+# start GUI application
 root = Tk()
-app = Application(master=root)
-app.mainloop()
+gui = Application(master=root)
+gui.mainloop()
